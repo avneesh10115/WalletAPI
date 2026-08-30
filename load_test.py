@@ -13,6 +13,7 @@ from werkzeug.serving import WSGIRequestHandler, make_server
 from app import create_app
 
 
+# Suppress terminal spam during load test
 class SilentHandler(WSGIRequestHandler):
     def log_request(self, code="-", size="-"):
         pass
@@ -43,7 +44,7 @@ def percentile(values, percent):
 def run_load_test(request_count, workers):
     with tempfile.TemporaryDirectory() as folder:
         database = f"{folder}/load_test.db"
-        app = create_app(database)
+        app = create_app(database, rate_limit=f"{request_count + 100} per minute")
         server = make_server(
             "127.0.0.1", 0, app, threaded=True, request_handler=SilentHandler
         )

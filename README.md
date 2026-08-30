@@ -3,6 +3,9 @@
 This is a small REST API made with Python, Flask and SQLite. It creates accounts
 and transfers money between them. There is no frontend.
 
+I made this project to understand concurrent requests, SQLite transactions and
+idempotency. It does not have authentication or authorization.
+
 ## Stack
 
 - Python and Flask

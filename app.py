@@ -1,9 +1,13 @@
 import hashlib
 import json
+import os
 import sqlite3
 from pathlib import Path
 
 from flask import Flask, g, jsonify, request
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from werkzeug.exceptions import RequestEntityTooLarge
 
 
 class ApiError(Exception):
@@ -13,10 +17,22 @@ class ApiError(Exception):
         self.status_code = status_code
 
 
-def create_app(database_path=None):
+def debug_enabled():
+    return os.environ.get("FLASK_DEBUG", "").lower() in {"1", "true"}
+
+
+def create_app(database_path=None, rate_limit="120 per minute"):
     app = Flask(__name__)
     app.config["DATABASE"] = str(
         database_path or Path(__file__).with_name("wallet.db")
+    )
+    app.config["MAX_CONTENT_LENGTH"] = 16 * 1024
+    app.config["RATELIMIT_HEADERS_ENABLED"] = True
+    Limiter(
+        key_func=get_remote_address,
+        app=app,
+        default_limits=[rate_limit],
+        storage_uri="memory://",
     )
 
     def get_db():
@@ -106,6 +122,14 @@ def create_app(database_path=None):
     @app.errorhandler(404)
     def handle_not_found(error):
         return jsonify({"error": "Endpoint not found"}), 404
+
+    @app.errorhandler(429)
+    def handle_rate_limit(error):
+        return jsonify({"error": "Rate limit exceeded"}), 429
+
+    @app.errorhandler(RequestEntityTooLarge)
+    def handle_large_request(error):
+        return jsonify({"error": "Request body exceeds 16 KiB limit"}), 413
 
     @app.post("/accounts")
     def create_account():
@@ -236,4 +260,4 @@ app = create_app()
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=debug_enabled())

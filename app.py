@@ -109,6 +109,17 @@ def create_app(database_path=None, rate_limit="120 per minute"):
             "created_at": transfer["created_at"],
         }
 
+    def find_old_transfer(db, idempotency_key, request_hash):
+        transfer = db.execute(
+            "SELECT * FROM transfers WHERE idempotency_key = ?",
+            (idempotency_key,),
+        ).fetchone()
+        if transfer is not None and transfer["request_hash"] != request_hash:
+            raise ApiError(
+                "Idempotency key was already used with a different request", 409
+            )
+        return transfer
+
     @app.teardown_appcontext
     def close_db(error=None):
         db = g.pop("db", None)
@@ -176,20 +187,18 @@ def create_app(database_path=None, rate_limit="120 per minute"):
         request_hash = hashlib.sha256(sorted_data.encode()).hexdigest()
         db = get_db()
 
-        # Take the write lock before checking the key. Two copies of the same
-        # request cannot pass this check at the same time.
+        old_transfer = find_old_transfer(db, idempotency_key, request_hash)
+        if old_transfer is not None:
+            headers = {"Idempotent-Replayed": "true"}
+            return jsonify(transfer_to_dict(old_transfer)), 200, headers
+
+        # Check again after taking the write lock in case another request
+        # saved the same key after the first check.
         db.execute("BEGIN IMMEDIATE")
 
         try:
-            old_transfer = db.execute(
-                "SELECT * FROM transfers WHERE idempotency_key = ?",
-                (idempotency_key,),
-            ).fetchone()
+            old_transfer = find_old_transfer(db, idempotency_key, request_hash)
             if old_transfer is not None:
-                if old_transfer["request_hash"] != request_hash:
-                    raise ApiError(
-                        "Idempotency key was already used with a different request", 409
-                    )
                 db.commit()
                 headers = {"Idempotent-Replayed": "true"}
                 return jsonify(transfer_to_dict(old_transfer)), 200, headers

@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -24,6 +25,31 @@ class WalletApiTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 201)
         return response.get_json()
+
+    def test_replay_does_not_wait_for_write_lock(self):
+        sender = self.create_account("Alice", 1000)
+        receiver = self.create_account("Bob", 0)
+        data = {
+            "from_account": sender["id"],
+            "to_account": receiver["id"],
+            "amount": 250,
+        }
+        headers = {"Idempotency-Key": "payment-1"}
+
+        created = self.client.post("/transfers", json=data, headers=headers)
+        self.assertEqual(created.status_code, 201)
+
+        lock_db = sqlite3.connect(self.database, timeout=1)
+        lock_db.execute("BEGIN IMMEDIATE")
+        try:
+            replayed = self.client.post("/transfers", json=data, headers=headers)
+        finally:
+            lock_db.rollback()
+            lock_db.close()
+
+        self.assertEqual(replayed.status_code, 200)
+        self.assertEqual(replayed.headers["Idempotent-Replayed"], "true")
+        self.assertEqual(replayed.get_json()["id"], created.get_json()["id"])
 
     def test_request_size_and_rate_limits(self):
         too_large = self.client.post(
